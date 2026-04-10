@@ -1,25 +1,39 @@
 # Habit-Model
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen, Calculator, Code2, Dumbbell, NotebookPen, Trophy,
-  Wine, Cigarette, RotateCcw, Flame, Target, CheckCircle2,
+  Wine, Cigarette, RotateCcw, Flame, Target, CheckCircle2, Zap, Star,
 } from "lucide-react";
 
+const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 const HABITS = [
-  { key: "reducedSmoking", label: "Reduced Smoking", target: "≤ 1",      icon: Cigarette,  color: "#f97316" },
-  { key: "noDrinking",     label: "No Drinking",     target: "0 drinks", icon: Wine,        color: "#a855f7" },
-  { key: "exercise",       label: "Exercise",        target: "≥ 30 min", icon: Dumbbell,    color: "#22c55e" },
-  { key: "journaling",     label: "Journaling",      target: "Done",     icon: NotebookPen, color: "#f59e0b" },
-  { key: "code",           label: "Code",            target: "Done",     icon: Code2,       color: "#3b82f6" },
-  { key: "math",           label: "Math",            target: "Done",     icon: Calculator,  color: "#ec4899" },
-  { key: "reading",        label: "Reading",         target: "Done",     icon: BookOpen,    color: "#14b8a6" },
-  { key: "studying",       label: "Studying",        target: "Done",     icon: Trophy,      color: "#eab308" },
+  { key: "reducedSmoking", label: "Smoking",  target: "≤ 1",      icon: Cigarette,  color: "#f97316" },
+  { key: "noDrinking",     label: "Sober",    target: "0 drinks", icon: Wine,        color: "#a855f7" },
+  { key: "exercise",       label: "Exercise", target: "≥ 30 min", icon: Dumbbell,    color: "#22c55e" },
+  { key: "journaling",     label: "Journal",  target: "Done",     icon: NotebookPen, color: "#f59e0b" },
+  { key: "code",           label: "Code",     target: "Done",     icon: Code2,       color: "#3b82f6" },
+  { key: "math",           label: "Math",     target: "Done",     icon: Calculator,  color: "#ec4899" },
+  { key: "reading",        label: "Read",     target: "Done",     icon: BookOpen,    color: "#14b8a6" },
+  { key: "studying",       label: "Study",    target: "Done",     icon: Trophy,      color: "#eab308" },
 ];
 
-const STORAGE_KEY = "work-habit-schedule-v3";
+const STORAGE_KEY = "work-habit-schedule-v4";
 const SOLID_DAY_THRESHOLD = 6;
+
+const FEEDBACK = [
+  "🔥 Keep the streak alive!",
+  "💪 That's what discipline looks like!",
+  "⚡ You're building momentum!",
+  "🎯 One step closer to your goal!",
+  "✨ Consistency is your superpower!",
+  "🚀 Making it happen!",
+  "💡 Another win for the books!",
+  "🏆 Champions show up every day!",
+  "🌊 In the flow state now!",
+  "🎖️ Elite habits, elite results!",
+];
 
 function buildInitialState() {
   return DAYS.reduce((acc, day) => {
@@ -30,74 +44,98 @@ function buildInitialState() {
   }, {});
 }
 
-/* ─── Donut chart ─── */
-function Donut({ value, size = 84, stroke = 10, label = "", color = "#ffffff" }) {
-  const angle = Math.max(0, Math.min(100, value)) * 3.6;
-  const isComplete = value === 100;
+/* ─── Toast notifications ─── */
+function Toast({ toasts }) {
   return (
-    <div
-      className="relative grid place-items-center rounded-full transition-all duration-500"
-      style={{
-        width: size,
-        height: size,
-        background: `conic-gradient(${isComplete ? "#22c55e" : color} ${angle}deg, rgba(255,255,255,0.10) ${angle}deg 360deg)`,
-      }}
-    >
-      <div
-        className="grid place-items-center rounded-full bg-[#060e2b] text-white"
-        style={{ width: size - stroke * 2, height: size - stroke * 2 }}
-      >
-        <div className="text-center leading-tight">
-          <div
-            className="font-bold"
-            style={{
-              fontSize: size > 90 ? "1.1rem" : "0.75rem",
-              color: isComplete ? "#4ade80" : "white",
-            }}
-          >
-            {value}%
-          </div>
-          {label && (
-            <div className="uppercase tracking-wider text-blue-300/70" style={{ fontSize: "0.55rem" }}>
-              {label}
-            </div>
-          )}
+    <div className="pointer-events-none fixed bottom-6 right-6 z-50 flex flex-col-reverse gap-2">
+      {toasts.map((t) => (
+        <div
+          key={t.id}
+          className="rounded-2xl border border-white/15 px-4 py-3 text-sm font-semibold text-white shadow-2xl"
+          style={{
+            background: "linear-gradient(135deg, #0d2980, #1e3a8a)",
+            animation: "toastIn 0.3s ease-out forwards",
+          }}
+        >
+          {t.message}
         </div>
-      </div>
+      ))}
     </div>
   );
 }
 
-/* ─── Thin animated progress bar ─── */
-function ProgressBar({ pct, color = "#3b82f6" }) {
+/* ─── SVG Ring progress indicator ─── */
+function Ring({ pct, size = 56, stroke = 5, color = "#3b82f6", children }) {
+  const r = (size - stroke * 2) / 2;
+  const circ = 2 * Math.PI * r;
+  const dash = (Math.min(100, Math.max(0, pct)) / 100) * circ;
+  const ringColor = pct === 100 ? "#22c55e" : color;
   return (
-    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">
-      <div
-        className="h-full rounded-full transition-all duration-700 ease-out"
-        style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${color}99, ${color})` }}
-      />
+    <div className="relative grid place-items-center flex-shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90" style={{ position: "absolute" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} stroke="rgba(255,255,255,0.07)" fill="none" />
+        <circle
+          cx={size / 2} cy={size / 2} r={r}
+          strokeWidth={stroke} stroke={ringColor} fill="none"
+          strokeDasharray={`${dash} ${circ}`}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dasharray 0.6s ease-out, stroke 0.4s" }}
+        />
+      </svg>
+      <div className="relative z-10 text-center">{children}</div>
     </div>
   );
 }
 
-/* ─── Metric card ─── */
-function MetricCard({ title, value, sub, icon: Icon, accent = "#3b82f6" }) {
+/* ─── CSS bar chart for daily completion ─── */
+function DayBarChart({ dayStats }) {
+  const maxDone = Math.max(...dayStats.map((d) => d.done), 1);
   return (
-    <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-5 text-white backdrop-blur-sm transition-all hover:border-white/20 hover:bg-white/10">
-      <div
-        className="pointer-events-none absolute inset-0 opacity-0 transition-opacity group-hover:opacity-100"
-        style={{ background: `radial-gradient(circle at 50% 0%, ${accent}20 0%, transparent 70%)` }}
-      />
-      <div className="relative">
-        {Icon && (
-          <div className="mb-3 inline-flex rounded-xl p-2" style={{ background: `${accent}22`, color: accent }}>
-            <Icon className="h-4 w-4" />
+    <div className="flex h-32 items-end gap-2">
+      {dayStats.map((item, i) => {
+        const isPerfect = item.done === HABITS.length;
+        const isGood = item.done >= SOLID_DAY_THRESHOLD;
+        const barColor = isPerfect ? "#22c55e" : isGood ? "#3b82f6" : item.done > 0 ? "#6366f1" : "rgba(255,255,255,0.06)";
+        const heightPct = item.done === 0 ? 4 : Math.round((item.done / maxDone) * 100);
+        return (
+          <div key={item.day} className="group flex flex-1 flex-col items-center gap-1">
+            <div
+              className="text-[10px] font-semibold opacity-0 transition-opacity group-hover:opacity-100"
+              style={{ color: barColor }}
+            >
+              {item.done}/{HABITS.length}
+            </div>
+            <div className="relative flex w-full flex-1 items-end">
+              <div
+                className="w-full rounded-t-md transition-all duration-700 ease-out"
+                style={{ height: `${heightPct}%`, background: barColor, minHeight: 4,
+                  boxShadow: item.done > 0 ? `0 0 8px ${barColor}60` : "none" }}
+              />
+            </div>
+            <div className="text-[11px] font-semibold text-blue-300/50">{DAYS_SHORT[i]}</div>
           </div>
-        )}
-        <div className="text-[10px] uppercase tracking-[0.22em] text-blue-300/70">{title}</div>
-        <div className="mt-1 text-3xl font-bold tracking-tight">{value}</div>
-        <div className="mt-1 text-xs text-blue-100/50">{sub}</div>
-      </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ─── 7-cell heat row sparkline per habit ─── */
+function HeatRow({ weekData, habitKey, color }) {
+  return (
+    <div className="flex gap-1">
+      {DAYS.map((day, i) => {
+        const active = weekData[day]?.[habitKey];
+        return (
+          <div
+            key={i}
+            className="h-2 flex-1 rounded-sm transition-all duration-300"
+            style={{ background: active ? color : "rgba(255,255,255,0.07)",
+              boxShadow: active ? `0 0 4px ${color}70` : "none" }}
+            title={`${DAYS_SHORT[i]}: ${active ? "✓" : "—"}`}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -107,34 +145,50 @@ export default function HabitDashboard() {
   const [weekData, setWeekData] = useState(buildInitialState);
   const [activeDay, setActiveDay] = useState(null);
   const [justToggled, setJustToggled] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const toastCounter = useRef(0);
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) setWeekData(JSON.parse(saved));
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) { console.error(err); }
   }, []);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(weekData));
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) { console.error(err); }
   }, [weekData]);
 
+  const addToast = useCallback((message) => {
+    const id = ++toastCounter.current;
+    setToasts((t) => [...t.slice(-3), { id, message }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
+  }, []);
+
   const toggleHabit = (day, key) => {
-    setWeekData((prev) => ({ ...prev, [day]: { ...prev[day], [key]: !prev[day][key] } }));
-    const id = `${day}-${key}`;
-    setJustToggled(id);
-    setTimeout(() => setJustToggled(null), 350);
+    setWeekData((prev) => {
+      const next = { ...prev, [day]: { ...prev[day], [key]: !prev[day][key] } };
+      if (!prev[day][key]) {
+        const dayDone = HABITS.filter((h) => next[day][h.key]).length;
+        if (dayDone === HABITS.length) {
+          setTimeout(() => addToast("🌟 PERFECT DAY — every habit nailed!"), 80);
+        } else if (dayDone === SOLID_DAY_THRESHOLD) {
+          setTimeout(() => addToast("🔒 Locked in! 6 habits done today."), 80);
+        } else {
+          const msg = FEEDBACK[Math.floor(Math.random() * FEEDBACK.length)];
+          setTimeout(() => addToast(msg), 80);
+        }
+      }
+      return next;
+    });
+    setJustToggled(`${day}-${key}`);
+    setTimeout(() => setJustToggled(null), 400);
   };
 
-  const setField = (day, field, value) => {
+  const setField = (day, field, value) =>
     setWeekData((prev) => ({ ...prev, [day]: { ...prev[day], [field]: value } }));
-  };
 
   const resetAll = () => setWeekData(buildInitialState());
 
@@ -148,11 +202,10 @@ export default function HabitDashboard() {
   const overallPct = Math.round((totalDone / totalPossible) * 100);
 
   const dayStats = useMemo(
-    () =>
-      DAYS.map((day) => {
-        const done = HABITS.filter((h) => weekData[day]?.[h.key]).length;
-        return { day, done, pct: Math.round((done / HABITS.length) * 100) };
-      }),
+    () => DAYS.map((day) => {
+      const done = HABITS.filter((h) => weekData[day]?.[h.key]).length;
+      return { day, done, pct: Math.round((done / HABITS.length) * 100) };
+    }),
     [weekData],
   );
 
@@ -170,310 +223,322 @@ export default function HabitDashboard() {
   }, [dayStats]);
 
   const habitBreakdown = useMemo(
-    () =>
-      HABITS.map((habit) => {
-        const count = DAYS.reduce((s, d) => s + (weekData[d]?.[habit.key] ? 1 : 0), 0);
-        return { ...habit, count, pct: Math.round((count / DAYS.length) * 100) };
-      }),
+    () => HABITS.map((habit) => {
+      const count = DAYS.reduce((s, d) => s + (weekData[d]?.[habit.key] ? 1 : 0), 0);
+      return { ...habit, count, pct: Math.round((count / DAYS.length) * 100) };
+    }),
     [weekData],
   );
 
+  const weekScore = overallPct >= 90 ? "🌟 Exceptional week!"
+    : overallPct >= 70 ? "💪 Strong progress!"
+    : overallPct >= 40 ? "⚡ Keep pushing!"
+    : "🎯 Build the habit!";
+
   return (
-    <div className="min-h-screen bg-[#060e2b] p-4 text-white md:p-6" style={{ fontFamily: "'Inter', system-ui, sans-serif" }}>
-      {/* Ambient glow blobs */}
+    <div
+      className="min-h-screen bg-[#06091f] p-4 text-white md:p-5"
+      style={{ fontFamily: "'Inter', system-ui, sans-serif" }}
+    >
+      {/* Ambient glows */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute -top-40 left-1/4 h-96 w-96 rounded-full bg-blue-600/10 blur-[120px]" />
-        <div className="absolute bottom-0 right-1/4 h-80 w-80 rounded-full bg-indigo-500/10 blur-[100px]" />
+        <div className="absolute -top-32 left-1/3 h-[500px] w-[500px] rounded-full bg-blue-700/8 blur-[160px]" />
+        <div className="absolute top-1/2 right-0 h-[400px] w-[400px] rounded-full bg-violet-600/8 blur-[130px]" />
+        <div className="absolute bottom-0 left-0 h-[300px] w-[300px] rounded-full bg-indigo-500/8 blur-[110px]" />
       </div>
 
-      <div className="relative mx-auto max-w-7xl space-y-5">
-        {/* ── Header card ── */}
-        <div className="overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-[#0d2980] via-[#0a2060] to-[#060e2b] shadow-2xl">
-          <div className="grid gap-5 p-5 lg:grid-cols-[300px_1fr] lg:p-7">
+      <Toast toasts={toasts} />
 
-            {/* Sidebar */}
-            <div className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-md">
-              <div>
-                <div className="text-[10px] uppercase tracking-[0.3em] text-blue-400">Weekly System</div>
-                <h1 className="mt-1 text-3xl font-bold tracking-tight">Work Habits</h1>
-                <p className="mt-2 text-sm leading-6 text-blue-200/60">
-                  Your personal discipline dashboard. Track every habit, every day.
-                </p>
-              </div>
+      <div className="relative mx-auto max-w-7xl space-y-3">
 
-              <div className="flex justify-center py-1">
-                <Donut value={overallPct} label="overall" size={128} stroke={14} />
-              </div>
-
-              {/* Mini stat row */}
-              <div className="grid grid-cols-3 gap-2 text-center">
-                {[
-                  { label: "Streak", value: currentStreak, suffix: "d", color: "#f97316" },
-                  { label: "Perfect", value: perfectDays, suffix: "",  color: "#22c55e" },
-                  { label: "Solid",   value: solidDays,   suffix: "",  color: "#3b82f6" },
-                ].map(({ label, value, suffix, color }) => (
-                  <div key={label} className="rounded-xl border border-white/10 bg-white/5 py-2">
-                    <div className="text-xl font-bold" style={{ color }}>{value}{suffix}</div>
-                    <div className="text-[9px] uppercase tracking-wider text-blue-300/60">{label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Habit list with per-habit progress bars */}
-              <div className="rounded-2xl border border-white/8 bg-[#07103a] p-3">
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-blue-400">Habits</div>
-                <div className="space-y-1.5">
-                  {habitBreakdown.map((habit) => {
-                    const Icon = habit.icon;
-                    return (
-                      <div key={habit.key} className="flex items-center gap-2.5 rounded-xl bg-white/4 px-3 py-2 transition hover:bg-white/8">
-                        <div className="flex-shrink-0 rounded-lg p-1.5" style={{ background: `${habit.color}22`, color: habit.color }}>
-                          <Icon className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="truncate text-xs font-medium">{habit.label}</span>
-                            <span className="ml-2 flex-shrink-0 text-[11px] font-bold" style={{ color: habit.color }}>{habit.count}/7</span>
-                          </div>
-                          <ProgressBar pct={habit.pct} color={habit.color} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <button
-                onClick={resetAll}
-                className="flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-blue-200 transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-300"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Reset Week
-              </button>
+        {/* ── TOP BAR: title + stat chips + reset ── */}
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/8 bg-gradient-to-r from-[#0c1d5c]/80 to-[#080f30]/80 px-5 py-3 backdrop-blur-sm">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-blue-500/15 p-2">
+              <Flame className="h-5 w-5 text-blue-400" />
             </div>
-
-            {/* Main area */}
-            <div className="space-y-5">
-              {/* Metric cards */}
-              <div className="grid gap-3 sm:grid-cols-3">
-                <MetricCard title="Progress"   value={`${overallPct}%`}          sub={`${totalDone} / ${totalPossible} checked`}      icon={Target}   accent="#3b82f6" />
-                <MetricCard title="Best Day"   value={bestDay?.day?.slice(0, 3) || "—"} sub={`${bestDay?.done || 0} of ${HABITS.length} habits`} icon={Trophy}   accent="#eab308" />
-                <MetricCard title="Locked In"  value={solidDays}                  sub="Days with 6+ habits done"                        icon={Flame}    accent="#f97316" />
-              </div>
-
-              {/* Habit grid */}
-              <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-xl">
-                <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <div className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Weekly View</div>
-                    <h2 className="mt-0.5 text-xl font-bold text-[#0a1f5e]">7-Day Habit Schedule</h2>
-                  </div>
-                  <div className="inline-flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                    Click circles to mark complete
-                  </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="min-w-full border-separate border-spacing-0 text-sm">
-                    <thead>
-                      <tr>
-                        <th className="sticky left-0 z-10 bg-[#0a1f5e] px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-blue-200">
-                          Habit
-                        </th>
-                        {DAYS.map((day) => {
-                          const stat = dayStats.find((d) => d.day === day);
-                          const isActive = activeDay === day;
-                          return (
-                            <th
-                              key={day}
-                              onClick={() => setActiveDay(isActive ? null : day)}
-                              className={`cursor-pointer bg-[#0a1f5e] px-3 py-3 text-center transition hover:bg-[#0d2980] ${isActive ? "bg-[#1a3d9e]" : ""}`}
-                            >
-                              <div className="text-xs font-semibold uppercase tracking-wider text-blue-200">{day.slice(0, 3)}</div>
-                              {stat && (
-                                <div
-                                  className="mt-0.5 text-[10px] font-semibold"
-                                  style={{
-                                    color: stat.done === HABITS.length ? "#4ade80"
-                                         : stat.done >= SOLID_DAY_THRESHOLD ? "#fbbf24"
-                                         : "rgba(147,197,253,0.5)",
-                                  }}
-                                >
-                                  {stat.done}/{HABITS.length}
-                                </div>
-                              )}
-                            </th>
-                          );
-                        })}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {HABITS.map((habit, hIdx) => {
-                        const Icon = habit.icon;
-                        return (
-                          <tr key={habit.key} className={hIdx % 2 === 0 ? "bg-slate-50/60" : "bg-white"}>
-                            <td className="sticky left-0 z-10 border-b border-slate-100 bg-inherit px-5 py-3">
-                              <div className="flex items-center gap-3">
-                                <div className="flex-shrink-0 rounded-lg p-2" style={{ background: `${habit.color}18`, color: habit.color }}>
-                                  <Icon className="h-4 w-4" />
-                                </div>
-                                <div>
-                                  <div className="text-sm font-semibold text-slate-800">{habit.label}</div>
-                                  <div className="text-[11px] text-slate-400">{habit.target}</div>
-                                </div>
-                              </div>
-                            </td>
-                            {DAYS.map((day) => {
-                              const active = weekData[day]?.[habit.key];
-                              const cellKey = `${day}-${habit.key}`;
-                              const popping = justToggled === cellKey;
-                              const highlighted = activeDay === day;
-                              return (
-                                <td
-                                  key={cellKey}
-                                  className={`border-b border-slate-100 px-3 py-3 text-center transition ${highlighted ? "bg-blue-50" : ""}`}
-                                >
-                                  <button
-                                    onClick={() => toggleHabit(day, habit.key)}
-                                    aria-label={`${habit.label} on ${day}: ${active ? "completed" : "not completed"}`}
-                                    aria-pressed={active}
-                                    className={`mx-auto grid h-9 w-9 place-items-center rounded-full border-2 transition-all duration-200 ${popping ? "scale-125" : "scale-100"} ${
-                                      active
-                                        ? "border-transparent shadow-lg"
-                                        : "border-slate-200 bg-white text-slate-300 hover:border-slate-400"
-                                    }`}
-                                    style={active ? { background: habit.color, boxShadow: `0 2px 14px ${habit.color}55` } : {}}
-                                  >
-                                    {active
-                                      ? <CheckCircle2 className="h-4 w-4 text-white" />
-                                      : <span className="text-xs text-slate-300">○</span>
-                                    }
-                                  </button>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+            <div>
+              <h1 className="text-base font-bold tracking-tight leading-none">Work Habits</h1>
+              <p className="mt-0.5 text-[10px] text-blue-300/40 uppercase tracking-widest">Weekly Tracker</p>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { label: "Overall", value: `${overallPct}%`, color: "#3b82f6", icon: Target },
+              { label: "Streak",  value: `${currentStreak}d`, color: "#f97316", icon: Flame },
+              { label: "Perfect", value: perfectDays,     color: "#22c55e", icon: Star },
+              { label: "Solid",   value: solidDays,       color: "#a855f7", icon: Zap },
+            ].map(({ label, value, color, icon: Icon }) => (
+              <div key={label} className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/4 px-3 py-1.5">
+                <Icon className="h-3 w-3" style={{ color }} />
+                <span className="text-xs font-bold" style={{ color }}>{value}</span>
+                <span className="text-[9px] uppercase tracking-widest text-blue-300/35">{label}</span>
+              </div>
+            ))}
+            <button
+              onClick={resetAll}
+              className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/4 px-3 py-1.5 text-[11px] font-medium text-blue-300/50 transition hover:border-red-400/30 hover:bg-red-500/8 hover:text-red-300"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Reset
+            </button>
           </div>
         </div>
 
-        {/* ── Bottom section ── */}
-        <div className="grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
+        {/* ── HABIT GRID TABLE ── */}
+        <div className="overflow-hidden rounded-2xl border border-white/8 bg-[#080d28]">
+          <div className="flex items-center justify-between border-b border-white/5 px-5 py-3">
+            <div>
+              <div className="text-[9px] uppercase tracking-widest text-blue-400/50">Weekly Schedule</div>
+              <h2 className="text-sm font-bold leading-tight">Habit Grid</h2>
+            </div>
+            <div className="flex items-center gap-1.5 rounded-xl bg-white/4 px-3 py-1.5 text-[10px] font-medium text-blue-300/40">
+              <CheckCircle2 className="h-3 w-3 text-green-500/60" />
+              Tap to check off
+            </div>
+          </div>
 
-          {/* Daily analytics */}
-          <div className="rounded-3xl border border-white/10 bg-white p-5 text-slate-900 shadow-xl">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <div className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Daily Analytics</div>
-                <h3 className="mt-0.5 text-xl font-bold text-[#0a1f5e]">Progress by Day</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/5">
+                  <th className="px-4 py-2.5 text-left text-[10px] font-medium uppercase tracking-widest text-blue-300/35 w-36">
+                    Habit
+                  </th>
+                  {DAYS.map((day, i) => {
+                    const stat = dayStats[i];
+                    const isActive = activeDay === day;
+                    const isPerfect = stat.done === HABITS.length;
+                    const isGood = stat.done >= SOLID_DAY_THRESHOLD;
+                    return (
+                      <th
+                        key={day}
+                        onClick={() => setActiveDay(isActive ? null : day)}
+                        className={`cursor-pointer px-2 py-2.5 text-center transition-colors select-none ${isActive ? "bg-blue-500/10" : "hover:bg-white/3"}`}
+                      >
+                        <div className="text-xs font-bold text-blue-200/60">{DAYS_SHORT[i]}</div>
+                        <div
+                          className="mt-0.5 text-[10px] font-semibold"
+                          style={{
+                            color: isPerfect ? "#4ade80" : isGood ? "#fbbf24" : stat.done > 0 ? "#818cf8" : "rgba(147,197,253,0.25)",
+                          }}
+                        >
+                          {stat.done}/{HABITS.length}
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {HABITS.map((habit, hIdx) => {
+                  const Icon = habit.icon;
+                  return (
+                    <tr
+                      key={habit.key}
+                      className={`border-b border-white/[0.04] last:border-0 transition-colors ${hIdx % 2 === 0 ? "bg-white/[0.015]" : ""}`}
+                    >
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-shrink-0 rounded-md p-1.5" style={{ background: `${habit.color}18`, color: habit.color }}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <div>
+                            <div className="text-xs font-semibold text-white/85">{habit.label}</div>
+                            <div className="text-[9px] text-blue-300/35">{habit.target}</div>
+                          </div>
+                        </div>
+                      </td>
+                      {DAYS.map((day) => {
+                        const active = weekData[day]?.[habit.key];
+                        const cellKey = `${day}-${habit.key}`;
+                        const popping = justToggled === cellKey;
+                        const highlighted = activeDay === day;
+                        return (
+                          <td
+                            key={cellKey}
+                            className={`px-2 py-2.5 text-center transition-colors ${highlighted ? "bg-blue-500/8" : ""}`}
+                          >
+                            <button
+                              onClick={() => toggleHabit(day, habit.key)}
+                              aria-label={`${habit.label} on ${day}: ${active ? "completed" : "not completed"}`}
+                              aria-pressed={active}
+                              className={`mx-auto grid h-8 w-8 place-items-center rounded-full transition-all duration-200 ${popping ? "scale-125" : "scale-100"} ${
+                                active
+                                  ? ""
+                                  : "border border-white/10 bg-white/3 hover:border-white/20 hover:bg-white/6"
+                              }`}
+                              style={active ? {
+                                background: habit.color,
+                                boxShadow: `0 0 14px ${habit.color}55`,
+                              } : {}}
+                            >
+                              {active
+                                ? <CheckCircle2 className="h-4 w-4 text-white" />
+                                : <span className="text-[10px] text-white/15">○</span>
+                              }
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ── BOTTOM ROW: charts left + breakdown right ── */}
+        <div className="grid gap-3 lg:grid-cols-[1fr_300px]">
+
+          {/* Left column: bar chart + horizontal day notes */}
+          <div className="space-y-3">
+
+            {/* Bar chart card */}
+            <div className="rounded-2xl border border-white/8 bg-[#080d28] p-5">
+              <div className="mb-4 flex items-start justify-between">
+                <div>
+                  <div className="text-[9px] uppercase tracking-widest text-blue-400/50">Analytics</div>
+                  <h3 className="text-sm font-bold leading-tight">Daily Completion</h3>
+                </div>
+                <div className="flex items-center gap-3 text-[10px] font-medium text-blue-300/35">
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-sm bg-green-500" />Perfect
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-sm bg-blue-500" />Solid
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded-sm bg-indigo-400" />Progress
+                  </span>
+                </div>
               </div>
-              <div className="text-xs text-slate-400">Add notes &amp; focus blocks per day</div>
+              <DayBarChart dayStats={dayStats} />
             </div>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {dayStats.map((item) => {
-                const isPerfect = item.done === HABITS.length;
-                const isGood    = item.done >= SOLID_DAY_THRESHOLD;
-                return (
-                  <div
-                    key={item.day}
-                    className={`rounded-2xl border p-4 transition-all ${
-                      isPerfect ? "border-green-200 bg-green-50"
-                      : isGood  ? "border-blue-100 bg-blue-50/40"
-                      :           "border-slate-200 bg-slate-50"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className={`text-sm font-bold ${isPerfect ? "text-green-700" : "text-slate-700"}`}>
-                          {item.day.slice(0, 3)}
+            {/* Horizontal scrolling day cards */}
+            <div className="rounded-2xl border border-white/8 bg-[#080d28] p-4">
+              <div className="mb-3">
+                <div className="text-[9px] uppercase tracking-widest text-blue-400/50">Daily Notes</div>
+                <h3 className="text-sm font-bold leading-tight">Focus &amp; Notes</h3>
+              </div>
+              <div className="flex gap-2.5 overflow-x-auto pb-1">
+                {dayStats.map((item, i) => {
+                  const isPerfect = item.done === HABITS.length;
+                  const isGood = item.done >= SOLID_DAY_THRESHOLD;
+                  return (
+                    <div
+                      key={item.day}
+                      className="w-36 flex-shrink-0 space-y-2 rounded-xl border p-3"
+                      style={{
+                        borderColor: isPerfect ? "rgba(34,197,94,0.25)"
+                          : isGood ? "rgba(59,130,246,0.2)"
+                          : "rgba(255,255,255,0.06)",
+                        background: isPerfect ? "rgba(34,197,94,0.05)"
+                          : isGood ? "rgba(59,130,246,0.05)"
+                          : "rgba(255,255,255,0.02)",
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className={`text-xs font-bold ${isPerfect ? "text-green-400" : "text-white/75"}`}>
+                            {DAYS_SHORT[i]}
+                          </div>
+                          {isPerfect && (
+                            <div className="text-[8px] font-bold uppercase tracking-widest text-green-400/80">✦ Perfect</div>
+                          )}
                         </div>
-                        <div className={`text-xs ${isPerfect ? "text-green-600" : "text-slate-400"}`}>
-                          {item.done}/{HABITS.length}
-                        </div>
-                        {isPerfect && (
-                          <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-green-500">Perfect ✦</div>
-                        )}
+                        <Ring
+                          pct={item.pct}
+                          size={30}
+                          stroke={3}
+                          color={isPerfect ? "#22c55e" : isGood ? "#3b82f6" : "#6366f1"}
+                        >
+                          <span className="text-[7px] font-bold text-white/60">{item.pct}%</span>
+                        </Ring>
                       </div>
-                      <Donut
-                        value={item.pct}
-                        size={54}
-                        stroke={7}
-                        color={isPerfect ? "#22c55e" : isGood ? "#3b82f6" : "#94a3b8"}
-                      />
-                    </div>
-                    <div className="mt-3 space-y-2">
                       <input
                         value={weekData[item.day]?.focusBlock || ""}
                         onChange={(e) => setField(item.day, "focusBlock", e.target.value)}
-                        placeholder="Main focus block"
-                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        placeholder="Focus…"
+                        className="w-full rounded-lg border border-white/8 bg-white/4 px-2 py-1 text-[10px] text-white/70 outline-none placeholder:text-white/18 focus:border-blue-500/40 focus:bg-white/6"
                       />
                       <textarea
                         value={weekData[item.day]?.notes || ""}
                         onChange={(e) => setField(item.day, "notes", e.target.value)}
-                        placeholder="Quick notes..."
-                        className="min-h-[68px] w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                        placeholder="Notes…"
+                        rows={3}
+                        className="w-full resize-none rounded-lg border border-white/8 bg-white/4 px-2 py-1 text-[10px] text-white/70 outline-none placeholder:text-white/18 focus:border-blue-500/40 focus:bg-white/6"
                       />
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </div>
 
-          {/* Habit breakdown */}
-          <div className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-gradient-to-br from-[#0d2980] via-[#0a2060] to-[#060e2b] p-5 text-white shadow-2xl">
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.25em] text-blue-400">Analysis</div>
-              <h3 className="mt-0.5 text-xl font-bold">Habit Completion</h3>
+          {/* Right column: habit breakdown with sparklines */}
+          <div className="rounded-2xl border border-white/8 bg-[#080d28] p-5">
+            <div className="mb-4">
+              <div className="text-[9px] uppercase tracking-widest text-blue-400/50">Analysis</div>
+              <h3 className="text-sm font-bold leading-tight">Habit Breakdown</h3>
             </div>
 
-            <div className="flex-1 space-y-2">
+            {/* Weekly score ring */}
+            <div className="mb-4 flex items-center gap-3 rounded-xl border border-white/6 bg-white/3 p-3">
+              <Ring pct={overallPct} size={60} stroke={6} color="#3b82f6">
+                <span className="text-sm font-bold text-white">{overallPct}%</span>
+              </Ring>
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-white/85">Weekly Score</div>
+                <div className="text-[10px] text-blue-300/45">{totalDone}/{totalPossible} habits</div>
+                <div className="mt-1 text-[10px] font-semibold text-blue-300">{weekScore}</div>
+                <div className="mt-0.5 text-[9px] text-blue-300/35">
+                  Best: {bestDay?.day?.slice(0, 3) || "—"} ({bestDay?.done || 0}/{HABITS.length})
+                </div>
+              </div>
+            </div>
+
+            {/* Per-habit sparklines */}
+            <div className="space-y-3">
               {habitBreakdown.map((habit) => {
                 const Icon = habit.icon;
                 return (
-                  <div key={habit.key} className="rounded-xl bg-white/4 px-3 py-2.5 transition hover:bg-white/7">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="rounded-lg p-1.5" style={{ background: `${habit.color}25`, color: habit.color }}>
-                          <Icon className="h-3.5 w-3.5" />
-                        </div>
-                        <span className="text-sm font-medium">{habit.label}</span>
+                  <div key={habit.key}>
+                    <div className="mb-1 flex items-center gap-2">
+                      <div className="rounded-md p-1 flex-shrink-0" style={{ background: `${habit.color}18`, color: habit.color }}>
+                        <Icon className="h-3 w-3" />
                       </div>
-                      <span className="text-xs font-bold" style={{ color: habit.color }}>{habit.count}/7</span>
+                      <span className="flex-1 text-xs font-medium text-white/75 truncate">{habit.label}</span>
+                      <span className="text-[11px] font-bold flex-shrink-0" style={{ color: habit.color }}>{habit.count}/7</span>
                     </div>
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="h-full rounded-full transition-all duration-700 ease-out"
-                        style={{ width: `${habit.pct}%`, background: `linear-gradient(90deg, ${habit.color}99, ${habit.color})` }}
-                      />
-                    </div>
+                    <HeatRow weekData={weekData} habitKey={habit.key} color={habit.color} />
                   </div>
                 );
               })}
             </div>
 
-            <div className="rounded-2xl border border-white/8 bg-white/5 p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold">
-                <Flame className="h-4 w-4 text-orange-400" />
+            <div className="mt-4 rounded-xl border border-white/6 bg-white/3 p-3">
+              <div className="flex items-center gap-2 text-[11px] font-semibold text-white/60">
+                <Flame className="h-3.5 w-3.5 text-orange-400" />
                 Weekly Rule
               </div>
-              <p className="mt-2 text-xs leading-5 text-blue-200/65">
-                Treat this like a scoreboard. Stack clean days. Miss one box and keep moving.
-                Miss the whole day — restart the next morning.
+              <p className="mt-1.5 text-[10px] leading-4 text-blue-200/35">
+                Stack clean days. Miss one — keep moving. Miss the whole day — restart tomorrow.
               </p>
             </div>
           </div>
         </div>
       </div>
+
+      <style>{`
+        @keyframes toastIn {
+          from { opacity: 0; transform: translateX(24px) scale(0.96); }
+          to   { opacity: 1; transform: translateX(0) scale(1); }
+        }
+      `}</style>
     </div>
   );
 }
