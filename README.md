@@ -9,17 +9,19 @@ const DAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 const HABITS = [
-  { key: "reducedSmoking", label: "Reduced Smoking", target: "≤ 1 / day",   icon: Cigarette,  color: "#f97316" },
-  { key: "noDrinking",     label: "No Drinking",     target: "0 drinks",    icon: Wine,        color: "#a855f7" },
-  { key: "exercise",       label: "Exercise",        target: "≥ 30 min",    icon: Dumbbell,    color: "#22c55e" },
-  { key: "journaling",     label: "Journaling",      target: "Entry done",  icon: NotebookPen, color: "#f59e0b" },
-  { key: "code",           label: "Coding",          target: "Session done",icon: Code2,       color: "#3b82f6" },
-  { key: "math",           label: "Math",            target: "Session done",icon: Calculator,  color: "#ec4899" },
-  { key: "reading",        label: "Reading",         target: "≥ 20 pages",  icon: BookOpen,    color: "#14b8a6" },
-  { key: "studying",       label: "Studying",        target: "Session done",icon: Trophy,      color: "#eab308" },
+  { key: "reducedSmoking", label: "Reduced Smoking", target: "≤ 1 / day",   icon: Cigarette,  color: "#f97316", category: "discipline" },
+  { key: "noDrinking",     label: "No Drinking",     target: "0 drinks",    icon: Wine,        color: "#a855f7", category: "discipline" },
+  { key: "exercise",       label: "Exercise",        target: "≥ 30 min",    icon: Dumbbell,    color: "#22c55e", category: "health"     },
+  { key: "journaling",     label: "Journaling",      target: "Entry done",  icon: NotebookPen, color: "#f59e0b", category: "health"     },
+  { key: "code",           label: "Coding",          target: "Session done",icon: Code2,       color: "#3b82f6", category: "learning"   },
+  { key: "math",           label: "Math",            target: "Session done",icon: Calculator,  color: "#ec4899", category: "learning"   },
+  { key: "reading",        label: "Reading",         target: "≥ 20 pages",  icon: BookOpen,    color: "#14b8a6", category: "learning"   },
+  { key: "studying",       label: "Studying",        target: "Session done",icon: Trophy,      color: "#eab308", category: "learning"   },
 ];
 
 const STORAGE_KEY = "work-habit-schedule-v5";
+const HISTORY_KEY = "work-habit-history-v1";
+const AI_KEY_STORAGE = "work-habit-ai-key";
 const SOLID_DAY_THRESHOLD = 6;
 
 const FEEDBACK_MSGS = [
@@ -41,6 +43,31 @@ function buildInitialState() {
     acc[day].notes = "";
     return acc;
   }, {});
+}
+
+/* ─── AGI helpers ─── */
+function exportHabitContext(schedule, weekStats) {
+  return {
+    week: schedule,
+    summary: weekStats,
+    habits: HABITS.map(({ key, label, category, target }) => ({ key, label, category, target })),
+  };
+}
+
+async function fetchAIMessage(prompt, apiKey) {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 160,
+      temperature: 0.8,
+    }),
+  });
+  if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+  const data = await res.json();
+  return data.choices[0].message.content.trim();
 }
 
 /* ─── Toast ─── */
@@ -137,11 +164,22 @@ function DayBarChart({ dayStats }) {
 
 /* ─── Main component ─── */
 export default function HabitDashboard() {
-  const [weekData, setWeekData]     = useState(buildInitialState);
-  const [activeDay, setActiveDay]   = useState(null);
-  const [justToggled, setJustToggled] = useState(null);
-  const [toasts, setToasts]         = useState([]);
+  const [weekData, setWeekData]         = useState(buildInitialState);
+  const [activeDay, setActiveDay]       = useState(null);
+  const [justToggled, setJustToggled]   = useState(null);
+  const [toasts, setToasts]             = useState([]);
   const toastCounter = useRef(0);
+
+  const [aiKey, setAiKey]               = useState(() => {
+    try { return localStorage.getItem(AI_KEY_STORAGE) || ""; } catch { return ""; }
+  });
+  const [showKeyInput, setShowKeyInput] = useState(false);
+  const [history, setHistory]           = useState([]);
+  const [aiInsight, setAiInsight]       = useState("");
+  const [aiInsightLoading, setAiInsightLoading] = useState(false);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput]       = useState("");
+  const [chatLoading, setChatLoading]   = useState(false);
 
   useEffect(() => {
     try { const s = localStorage.getItem(STORAGE_KEY); if (s) setWeekData(JSON.parse(s)); }
@@ -152,6 +190,16 @@ export default function HabitDashboard() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(weekData)); }
     catch (e) { console.error(e); }
   }, [weekData]);
+
+  useEffect(() => {
+    try { const h = localStorage.getItem(HISTORY_KEY); if (h) setHistory(JSON.parse(h)); }
+    catch (e) { console.error(e); }
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(AI_KEY_STORAGE, aiKey); }
+    catch (e) { console.error(e); }
+  }, [aiKey]);
 
   const addToast = useCallback((msg) => {
     const id = ++toastCounter.current;
@@ -168,6 +216,13 @@ export default function HabitDashboard() {
           setTimeout(() => addToast("🌟 PERFECT DAY — every single habit nailed!"), 80);
         } else if (dayDone === SOLID_DAY_THRESHOLD) {
           setTimeout(() => addToast("🔒 Locked in! 6 habits crushed today."), 80);
+        } else if (aiKey) {
+          const habitLabel = HABITS.find((h) => h.key === key)?.label || key;
+          const ctx = exportHabitContext(next, { dayDone, day });
+          const prompt = `You are a habit coach. In ≤15 words, give one short personalized encouraging message for completing "${habitLabel}" today. Week data: ${JSON.stringify(ctx.summary)}. Reply with just the message, no quotes.`;
+          fetchAIMessage(prompt, aiKey)
+            .then((msg) => addToast(msg))
+            .catch(() => addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]));
         } else {
           setTimeout(() => addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]), 80);
         }
@@ -181,7 +236,18 @@ export default function HabitDashboard() {
   const setNotes = (day, val) =>
     setWeekData((prev) => ({ ...prev, [day]: { ...prev[day], notes: val } }));
 
-  const resetAll = () => { if (window.confirm("Reset the entire week?")) setWeekData(buildInitialState()); };
+  const resetAll = () => {
+    if (window.confirm("Reset the entire week?")) {
+      setHistory((prev) => {
+        const updated = [{ savedAt: new Date().toISOString(), data: weekData }, ...prev].slice(0, 4);
+        try { localStorage.setItem(HISTORY_KEY, JSON.stringify(updated)); } catch (e) { console.error(e); }
+        return updated;
+      });
+      setWeekData(buildInitialState());
+      setAiInsight("");
+      setChatMessages([]);
+    }
+  };
 
   /* ── computed ── */
   const totalPossible = DAYS.length * HABITS.length;
@@ -222,6 +288,43 @@ export default function HabitDashboard() {
     : overallPct >= 40 ? "⚡ Keep pushing!"
     : "🎯 Build the habit!";
 
+  const weekStats = { overallPct, totalDone, totalPossible, solidDays, perfectDays, currentStreak, bestDay: bestDay?.day };
+
+  const getWeeklyInsight = async () => {
+    if (!aiKey) { addToast("⚙️ Add your OpenAI key first."); return; }
+    setAiInsightLoading(true);
+    setAiInsight("");
+    try {
+      const ctx = exportHabitContext(weekData, weekStats);
+      const prompt = `You are a habit coach. Analyze this week's habit data and write a 3-4 sentence coaching summary. Mention specific habits by name, call out both wins and gaps, and give one actionable suggestion for next week. Data: ${JSON.stringify(ctx)}`;
+      const msg = await fetchAIMessage(prompt, aiKey);
+      setAiInsight(msg);
+    } catch (e) {
+      setAiInsight("⚠️ Could not fetch insight. Check your API key and try again.");
+    } finally {
+      setAiInsightLoading(false);
+    }
+  };
+
+  const sendChatMessage = async () => {
+    const q = chatInput.trim();
+    if (!q) return;
+    if (!aiKey) { addToast("⚙️ Add your OpenAI key first."); return; }
+    setChatMessages((prev) => [...prev, { role: "user", content: q }]);
+    setChatInput("");
+    setChatLoading(true);
+    try {
+      const ctx = exportHabitContext(weekData, weekStats);
+      const prompt = `You are a habit coach AI. Answer this question using only the week's habit data provided. Be concise (≤3 sentences). Data: ${JSON.stringify(ctx)}\n\nQuestion: ${q}`;
+      const reply = await fetchAIMessage(prompt, aiKey);
+      setChatMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+    } catch (e) {
+      setChatMessages((prev) => [...prev, { role: "assistant", content: "⚠️ Error reaching AI. Check your API key." }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   /* ── render ── */
   return (
     <div
@@ -256,14 +359,42 @@ export default function HabitDashboard() {
                 <p className="mt-0.5 text-[10px] uppercase tracking-[0.25em] text-blue-300/40">Weekly Discipline System</p>
               </div>
             </div>
-            <button
-              onClick={resetAll}
-              className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/4 px-3 py-2 text-[11px] font-medium text-slate-400 transition hover:border-red-400/30 hover:bg-red-500/8 hover:text-red-300"
-            >
-              <RotateCcw className="h-3 w-3" />
-              Reset Week
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setShowKeyInput((v) => !v)}
+                className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/4 px-3 py-2 text-[11px] font-medium text-slate-400 transition hover:border-blue-400/30 hover:bg-blue-500/8 hover:text-blue-300"
+              >
+                ⚙️ AI Key
+              </button>
+              <button
+                onClick={resetAll}
+                className="flex items-center gap-1.5 rounded-xl border border-white/8 bg-white/4 px-3 py-2 text-[11px] font-medium text-slate-400 transition hover:border-red-400/30 hover:bg-red-500/8 hover:text-red-300"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reset Week
+              </button>
+            </div>
           </div>
+
+          {/* AI key input (collapsible) */}
+          {showKeyInput && (
+            <div className="flex items-center gap-3 border-b border-white/6 px-6 py-3">
+              <span className="flex-shrink-0 text-[11px] text-slate-400">OpenAI API Key</span>
+              <input
+                type="password"
+                value={aiKey}
+                onChange={(e) => setAiKey(e.target.value)}
+                placeholder="sk-..."
+                className="flex-1 rounded-lg border border-white/10 bg-white/4 px-3 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
+              />
+              <button
+                onClick={() => setShowKeyInput(false)}
+                className="text-[11px] text-slate-500 hover:text-slate-300"
+              >
+                Done
+              </button>
+            </div>
+          )}
 
           {/* Stats row — mirrors "Completed habits | Progress | Progress in %" */}
           <div className="grid grid-cols-2 gap-px bg-white/5 md:grid-cols-4">
@@ -605,6 +736,81 @@ export default function HabitDashboard() {
                 Stack clean days. Miss one — keep moving. Miss the whole day — restart tomorrow.
               </p>
             </div>
+          </div>
+        </div>
+
+        {/* ══════════════════════════════════════
+            AI INSIGHT PANEL
+        ══════════════════════════════════════ */}
+        <div className="mt-4 rounded-2xl border border-white/6 p-5" style={{ background: "#060e30" }}>
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-[9px] uppercase tracking-widest text-blue-400/50">AI Coach</div>
+              <h3 className="text-sm font-bold leading-tight text-slate-200">Weekly Insight</h3>
+            </div>
+            <button
+              onClick={getWeeklyInsight}
+              disabled={aiInsightLoading}
+              className="flex items-center gap-1.5 rounded-xl border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-[11px] font-semibold text-blue-300 transition hover:bg-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {aiInsightLoading ? "Thinking…" : "✨ Get AI Insight"}
+            </button>
+          </div>
+          {aiInsight ? (
+            <p className="text-xs leading-relaxed text-slate-300">{aiInsight}</p>
+          ) : (
+            <p className="text-[11px] text-slate-600">Click "Get AI Insight" to receive a personalised weekly coaching summary powered by GPT-4o mini.</p>
+          )}
+        </div>
+
+        {/* ══════════════════════════════════════
+            CHAT / QUERY PANEL
+        ══════════════════════════════════════ */}
+        <div className="mt-4 rounded-2xl border border-white/6 p-5" style={{ background: "#060e30" }}>
+          <div className="mb-3">
+            <div className="text-[9px] uppercase tracking-widest text-blue-400/50">AI Coach</div>
+            <h3 className="text-sm font-bold leading-tight text-slate-200">Ask About Your Habits</h3>
+          </div>
+
+          {/* Message history */}
+          <div className="mb-3 max-h-56 space-y-2 overflow-y-auto">
+            {chatMessages.length === 0 && (
+              <p className="text-[11px] text-slate-600">Try asking: "What's my weakest habit this week?" or "How can I improve my streak?"</p>
+            )}
+            {chatMessages.map((m, i) => (
+              <div
+                key={i}
+                className={`rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                  m.role === "user"
+                    ? "ml-8 bg-blue-500/15 text-blue-100"
+                    : "mr-8 bg-white/5 text-slate-300"
+                }`}
+              >
+                {m.content}
+              </div>
+            ))}
+            {chatLoading && (
+              <div className="mr-8 rounded-xl bg-white/5 px-3 py-2 text-xs text-slate-500">Thinking…</div>
+            )}
+          </div>
+
+          {/* Input row */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !chatLoading) sendChatMessage(); }}
+              placeholder="Ask about your habits…"
+              className="flex-1 rounded-xl border border-white/10 bg-white/4 px-3 py-2 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
+            />
+            <button
+              onClick={sendChatMessage}
+              disabled={chatLoading || !chatInput.trim()}
+              className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-xs font-semibold text-blue-300 transition hover:bg-blue-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
           </div>
         </div>
       </div>
