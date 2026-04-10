@@ -54,18 +54,21 @@ function exportHabitContext(schedule, weekStats) {
   };
 }
 
-async function fetchAIMessage(prompt, apiKey) {
+async function fetchAIMessage(prompt, apiKey, maxTokens = 400) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 160,
+      max_tokens: maxTokens,
       temperature: 0.8,
     }),
   });
-  if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`OpenAI ${res.status} ${res.statusText}${body ? `: ${body}` : ""}`);
+  }
   const data = await res.json();
   return data.choices[0].message.content.trim();
 }
@@ -171,7 +174,7 @@ export default function HabitDashboard() {
   const toastCounter = useRef(0);
 
   const [aiKey, setAiKey]               = useState(() => {
-    try { return localStorage.getItem(AI_KEY_STORAGE) || ""; } catch { return ""; }
+    try { return localStorage.getItem(AI_KEY_STORAGE) || ""; } catch (e) { console.error(e); return ""; }
   });
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [history, setHistory]           = useState([]);
@@ -220,7 +223,7 @@ export default function HabitDashboard() {
           const habitLabel = HABITS.find((h) => h.key === key)?.label || key;
           const ctx = exportHabitContext(next, { dayDone, day });
           const prompt = `You are a habit coach. In ≤15 words, give one short personalized encouraging message for completing "${habitLabel}" today. Week data: ${JSON.stringify(ctx.summary)}. Reply with just the message, no quotes.`;
-          fetchAIMessage(prompt, aiKey)
+          fetchAIMessage(prompt, aiKey, 60)
             .then((msg) => addToast(msg))
             .catch(() => addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]));
         } else {
@@ -307,9 +310,11 @@ export default function HabitDashboard() {
   };
 
   const sendChatMessage = async () => {
-    const q = chatInput.trim();
-    if (!q) return;
+    const raw = chatInput.trim();
+    if (!raw) return;
     if (!aiKey) { addToast("⚙️ Add your OpenAI key first."); return; }
+    // Sanitize: strip control characters and cap at 500 chars to prevent prompt injection / oversized requests
+    const q = raw.replace(/[\x00-\x1F\x7F]/g, " ").slice(0, 500);
     setChatMessages((prev) => [...prev, { role: "user", content: q }]);
     setChatInput("");
     setChatLoading(true);
@@ -759,7 +764,7 @@ export default function HabitDashboard() {
           {aiInsight ? (
             <p className="text-xs leading-relaxed text-slate-300">{aiInsight}</p>
           ) : (
-            <p className="text-[11px] text-slate-600">Click "Get AI Insight" to receive a personalised weekly coaching summary powered by GPT-4o mini.</p>
+            <p className="text-[11px] text-slate-600">Click "Get AI Insight" to receive a personalized weekly coaching summary powered by GPT-4o mini.</p>
           )}
         </div>
 
