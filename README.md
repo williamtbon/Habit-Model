@@ -22,6 +22,7 @@ const HABITS = [
 const STORAGE_KEY = "work-habit-schedule-v5";
 const HISTORY_KEY = "work-habit-history-v1";
 const AI_KEY_STORAGE = "work-habit-ai-key";
+const AI_PROXY_STORAGE = "work-habit-ai-proxy";
 const SOLID_DAY_THRESHOLD = 6;
 
 const FEEDBACK_MSGS = [
@@ -54,23 +55,31 @@ function exportHabitContext(schedule, weekStats) {
   };
 }
 
-async function fetchAIMessage(prompt, apiKey, maxTokens = 400) {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: maxTokens,
-      temperature: 0.8,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`OpenAI ${res.status} ${res.statusText}${body ? `: ${body}` : ""}`);
+async function fetchAIMessage(prompt, apiKey, maxTokens = 400, proxyBase = "") {
+  const base = (proxyBase || "https://api.openai.com").replace(/\/$/, "");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: maxTokens,
+        temperature: 0.8,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`OpenAI ${res.status} ${res.statusText}${body ? `: ${body}` : ""}`);
+    }
+    const data = await res.json();
+    return data.choices[0].message.content.trim();
+  } finally {
+    clearTimeout(timer);
   }
-  const data = await res.json();
-  return data.choices[0].message.content.trim();
 }
 
 /* ─── Toast ─── */
@@ -176,6 +185,9 @@ export default function HabitDashboard() {
   const [aiKey, setAiKey]               = useState(() => {
     try { return localStorage.getItem(AI_KEY_STORAGE) || ""; } catch (e) { console.error(e); return ""; }
   });
+  const [aiProxy, setAiProxy]           = useState(() => {
+    try { return localStorage.getItem(AI_PROXY_STORAGE) || ""; } catch (e) { console.error(e); return ""; }
+  });
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [history, setHistory]           = useState([]);
   const [aiInsight, setAiInsight]       = useState("");
@@ -203,6 +215,11 @@ export default function HabitDashboard() {
     try { localStorage.setItem(AI_KEY_STORAGE, aiKey); }
     catch (e) { console.error(e); }
   }, [aiKey]);
+
+  useEffect(() => {
+    try { localStorage.setItem(AI_PROXY_STORAGE, aiProxy); }
+    catch (e) { console.error(e); }
+  }, [aiProxy]);
 
   const addToast = useCallback((msg) => {
     const id = ++toastCounter.current;
@@ -234,10 +251,12 @@ export default function HabitDashboard() {
           { dayDone: newDayDone, day },
         );
         const prompt = `You are a habit coach. In ≤15 words, give one short personalized encouraging message for completing "${habitLabel}" today. Week data: ${JSON.stringify(ctx.summary)}. Reply with just the message, no quotes.`;
-        fetchAIMessage(prompt, aiKey.trim(), 60)
+        fetchAIMessage(prompt, aiKey.trim(), 60, aiProxy.trim())
           .then((msg) => addToast(msg))
           .catch((err) => {
-            if (err.message.includes("401") || err.message.toLowerCase().includes("auth")) {
+            const m = err.message || "";
+            const isAuth = m.includes("401") || m.toLowerCase().includes("unauthorized") || m.toLowerCase().includes("invalid api key");
+            if (isAuth) {
               addToast("⚠️ OpenAI key rejected. Check your key in ⚙️ AI Key.");
             } else {
               addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]);
@@ -313,13 +332,19 @@ export default function HabitDashboard() {
     try {
       const ctx = exportHabitContext(weekData, weekStats);
       const prompt = `You are a habit coach. Analyze this week's habit data and write a 3-4 sentence coaching summary. Mention specific habits by name, call out both wins and gaps, and give one actionable suggestion for next week. Data: ${JSON.stringify(ctx)}`;
-      const msg = await fetchAIMessage(prompt, aiKey.trim());
+      const msg = await fetchAIMessage(prompt, aiKey.trim(), 400, aiProxy.trim());
       setAiInsight(msg);
     } catch (e) {
-      const isAuth = e.message.includes("401") || e.message.toLowerCase().includes("auth");
-      setAiInsight(isAuth
-        ? `⚠️ API key rejected. Click ⚙️ AI Key and verify your key is correct.\n\nDetails: ${e.message}`
-        : `⚠️ Could not fetch insight.\n\nDetails: ${e.message}`);
+      const msg = e.message || "";
+      const isAuth    = msg.includes("401") || msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid api key");
+      const isTimeout = e.name === "AbortError";
+      const isNetwork = e instanceof TypeError || msg === "Failed to fetch" || msg.includes("NetworkError");
+      setAiInsight(
+        isAuth    ? `⚠️ API key rejected (401). Click ⚙️ AI Key and verify your key.\n\nDetails: ${msg}` :
+        isTimeout ? "⚠️ Request timed out after 30 s. OpenAI may be slow — try again." :
+        isNetwork ? `⚠️ Network error: your browser could not reach the OpenAI API. Possible causes:\n• No internet connection\n• A firewall / corporate proxy is blocking api.openai.com\n• A browser extension (ad-blocker) is blocking the request\n• The platform's Content-Security-Policy restricts outbound fetch\n\nIf your environment blocks direct calls, enter a proxy base URL in ⚙️ AI Key settings.\n\nDetails: ${msg}` :
+                    `⚠️ Could not fetch insight.\n\nDetails: ${msg}`
+      );
     } finally {
       setAiInsightLoading(false);
     }
@@ -337,15 +362,20 @@ export default function HabitDashboard() {
     try {
       const ctx = exportHabitContext(weekData, weekStats);
       const prompt = `You are a habit coach AI. Answer this question using only the week's habit data provided. Be concise (≤3 sentences). Data: ${JSON.stringify(ctx)}\n\nQuestion: ${q}`;
-      const reply = await fetchAIMessage(prompt, aiKey.trim());
+      const reply = await fetchAIMessage(prompt, aiKey.trim(), 400, aiProxy.trim());
       setChatMessages((prev) => [...prev, { role: "assistant", content: reply }]);
     } catch (e) {
-      const isAuth = e.message.includes("401") || e.message.toLowerCase().includes("auth");
+      const msg = e.message || "";
+      const isAuth    = msg.includes("401") || msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid api key");
+      const isTimeout = e.name === "AbortError";
+      const isNetwork = e instanceof TypeError || msg === "Failed to fetch" || msg.includes("NetworkError");
       setChatMessages((prev) => [...prev, {
         role: "assistant",
-        content: isAuth
-          ? `⚠️ API key rejected. Verify your key in ⚙️ AI Key.\n\nDetails: ${e.message}`
-          : `⚠️ Error reaching AI.\n\nDetails: ${e.message}`,
+        content:
+          isAuth    ? `⚠️ API key rejected (401). Verify your key in ⚙️ AI Key.\n\nDetails: ${msg}` :
+          isTimeout ? "⚠️ Request timed out after 30 s. Try again." :
+          isNetwork ? `⚠️ Network error: browser could not reach OpenAI.\nCheck your connection or configure a proxy in ⚙️ AI Key settings.\n\nDetails: ${msg}` :
+                      `⚠️ Error reaching AI.\n\nDetails: ${msg}`,
       }]);
     } finally {
       setChatLoading(false);
@@ -405,21 +435,37 @@ export default function HabitDashboard() {
 
           {/* AI key input (collapsible) */}
           {showKeyInput && (
-            <div className="flex items-center gap-3 border-b border-white/6 px-6 py-3">
-              <span className="flex-shrink-0 text-[11px] text-slate-400">OpenAI API Key</span>
-              <input
-                type="password"
-                value={aiKey}
-                onChange={(e) => setAiKey(e.target.value.trim())}
-                placeholder="sk-..."
-                className="flex-1 rounded-lg border border-white/10 bg-white/4 px-3 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
-              />
-              <button
-                onClick={() => setShowKeyInput(false)}
-                className="text-[11px] text-slate-500 hover:text-slate-300"
-              >
-                Done
-              </button>
+            <div className="flex flex-col gap-2 border-b border-white/6 px-6 py-3">
+              <div className="flex items-center gap-3">
+                <span className="flex-shrink-0 text-[11px] text-slate-400">OpenAI API Key</span>
+                <input
+                  type="password"
+                  value={aiKey}
+                  onChange={(e) => setAiKey(e.target.value.trim())}
+                  placeholder="sk-..."
+                  className="flex-1 rounded-lg border border-white/10 bg-white/4 px-3 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
+                />
+                <button
+                  onClick={() => setShowKeyInput(false)}
+                  className="text-[11px] text-slate-500 hover:text-slate-300"
+                >
+                  Done
+                </button>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="flex-shrink-0 text-[11px] text-slate-500">Proxy URL <span className="text-slate-600">(optional)</span></span>
+                <input
+                  type="text"
+                  value={aiProxy}
+                  onChange={(e) => setAiProxy(e.target.value.trim())}
+                  placeholder="https://my-proxy.example.com  (leave blank to call OpenAI directly)"
+                  className="flex-1 rounded-lg border border-white/10 bg-white/4 px-3 py-1.5 text-xs text-slate-400 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
+                />
+              </div>
+              <p className="text-[10px] text-slate-600">
+                If you see a "Failed to fetch" / network error, your environment may be blocking direct calls to api.openai.com.
+                Enter the base URL of an OpenAI-compatible proxy (e.g. a Cloudflare Worker) to route requests through it instead.
+              </p>
             </div>
           )}
 
