@@ -318,8 +318,8 @@ export default function HabitDashboard() {
     } catch (e) {
       const isAuth = e.message.includes("401") || e.message.toLowerCase().includes("auth");
       setAiInsight(isAuth
-        ? "⚠️ API key rejected (401). Click ⚙️ AI Key and verify your key is correct."
-        : "⚠️ Could not fetch insight. Check your API key and try again.");
+        ? `⚠️ API key rejected. Click ⚙️ AI Key and verify your key is correct.\n\nDetails: ${e.message}`
+        : `⚠️ Could not fetch insight.\n\nDetails: ${e.message}`);
     } finally {
       setAiInsightLoading(false);
     }
@@ -344,8 +344,8 @@ export default function HabitDashboard() {
       setChatMessages((prev) => [...prev, {
         role: "assistant",
         content: isAuth
-          ? "⚠️ API key rejected (401). Click ⚙️ AI Key and verify your key is correct."
-          : "⚠️ Error reaching AI. Check your API key.",
+          ? `⚠️ API key rejected. Verify your key in ⚙️ AI Key.\n\nDetails: ${e.message}`
+          : `⚠️ Error reaching AI.\n\nDetails: ${e.message}`,
       }]);
     } finally {
       setChatLoading(false);
