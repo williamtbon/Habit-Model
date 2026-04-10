@@ -211,29 +211,42 @@ export default function HabitDashboard() {
   }, []);
 
   const toggleHabit = (day, key) => {
-    setWeekData((prev) => {
-      const next = { ...prev, [day]: { ...prev[day], [key]: !prev[day][key] } };
-      if (!prev[day][key]) {
-        const dayDone = HABITS.filter((h) => next[day][h.key]).length;
-        if (dayDone === HABITS.length) {
-          setTimeout(() => addToast("🌟 PERFECT DAY — every single habit nailed!"), 80);
-        } else if (dayDone === SOLID_DAY_THRESHOLD) {
-          setTimeout(() => addToast("🔒 Locked in! 6 habits crushed today."), 80);
-        } else if (aiKey) {
-          const habitLabel = HABITS.find((h) => h.key === key)?.label || key;
-          const ctx = exportHabitContext(next, { dayDone, day });
-          const prompt = `You are a habit coach. In ≤15 words, give one short personalized encouraging message for completing "${habitLabel}" today. Week data: ${JSON.stringify(ctx.summary)}. Reply with just the message, no quotes.`;
-          fetchAIMessage(prompt, aiKey, 60)
-            .then((msg) => addToast(msg))
-            .catch(() => addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]));
-        } else {
-          setTimeout(() => addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]), 80);
-        }
-      }
-      return next;
-    });
+    // Compute derived values from the current snapshot — avoids side effects inside the updater
+    const wasOff     = !weekData[day]?.[key];
+    const nextDay    = { ...weekData[day], [key]: !weekData[day]?.[key] };
+    const newDayDone = HABITS.filter((h) => nextDay[h.key]).length;
+
+    setWeekData((prev) => ({ ...prev, [day]: { ...prev[day], [key]: !prev[day][key] } }));
     setJustToggled(`${day}-${key}`);
     setTimeout(() => setJustToggled(null), 380);
+
+    // Side effects run outside the updater so React Strict Mode double-invoke doesn't double-fire
+    setTimeout(() => {
+      if (!wasOff) return; // only show toast when checking, not unchecking
+      if (newDayDone === HABITS.length) {
+        addToast("🌟 PERFECT DAY — every single habit nailed!");
+      } else if (newDayDone === SOLID_DAY_THRESHOLD) {
+        addToast("🔒 Locked in! 6 habits crushed today.");
+      } else if (aiKey.trim()) {
+        const habitLabel = HABITS.find((h) => h.key === key)?.label || key;
+        const ctx = exportHabitContext(
+          { [day]: nextDay },
+          { dayDone: newDayDone, day },
+        );
+        const prompt = `You are a habit coach. In ≤15 words, give one short personalized encouraging message for completing "${habitLabel}" today. Week data: ${JSON.stringify(ctx.summary)}. Reply with just the message, no quotes.`;
+        fetchAIMessage(prompt, aiKey.trim(), 60)
+          .then((msg) => addToast(msg))
+          .catch((err) => {
+            if (err.message.includes("401") || err.message.toLowerCase().includes("auth")) {
+              addToast("⚠️ OpenAI key rejected. Check your key in ⚙️ AI Key.");
+            } else {
+              addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]);
+            }
+          });
+      } else {
+        addToast(FEEDBACK_MSGS[Math.floor(Math.random() * FEEDBACK_MSGS.length)]);
+      }
+    }, 80);
   };
 
   const setNotes = (day, val) =>
@@ -294,16 +307,19 @@ export default function HabitDashboard() {
   const weekStats = { overallPct, totalDone, totalPossible, solidDays, perfectDays, currentStreak, bestDay: bestDay?.day };
 
   const getWeeklyInsight = async () => {
-    if (!aiKey) { addToast("⚙️ Add your OpenAI key first."); return; }
+    if (!aiKey.trim()) { addToast("⚙️ Add your OpenAI key first."); return; }
     setAiInsightLoading(true);
     setAiInsight("");
     try {
       const ctx = exportHabitContext(weekData, weekStats);
       const prompt = `You are a habit coach. Analyze this week's habit data and write a 3-4 sentence coaching summary. Mention specific habits by name, call out both wins and gaps, and give one actionable suggestion for next week. Data: ${JSON.stringify(ctx)}`;
-      const msg = await fetchAIMessage(prompt, aiKey);
+      const msg = await fetchAIMessage(prompt, aiKey.trim());
       setAiInsight(msg);
     } catch (e) {
-      setAiInsight("⚠️ Could not fetch insight. Check your API key and try again.");
+      const isAuth = e.message.includes("401") || e.message.toLowerCase().includes("auth");
+      setAiInsight(isAuth
+        ? "⚠️ API key rejected (401). Click ⚙️ AI Key and verify your key is correct."
+        : "⚠️ Could not fetch insight. Check your API key and try again.");
     } finally {
       setAiInsightLoading(false);
     }
@@ -312,7 +328,7 @@ export default function HabitDashboard() {
   const sendChatMessage = async () => {
     const raw = chatInput.trim();
     if (!raw) return;
-    if (!aiKey) { addToast("⚙️ Add your OpenAI key first."); return; }
+    if (!aiKey.trim()) { addToast("⚙️ Add your OpenAI key first."); return; }
     // Sanitize: strip control characters and cap at 500 chars to prevent prompt injection / oversized requests
     const q = raw.replace(/[\x00-\x1F\x7F]/g, " ").slice(0, 500);
     setChatMessages((prev) => [...prev, { role: "user", content: q }]);
@@ -321,10 +337,16 @@ export default function HabitDashboard() {
     try {
       const ctx = exportHabitContext(weekData, weekStats);
       const prompt = `You are a habit coach AI. Answer this question using only the week's habit data provided. Be concise (≤3 sentences). Data: ${JSON.stringify(ctx)}\n\nQuestion: ${q}`;
-      const reply = await fetchAIMessage(prompt, aiKey);
+      const reply = await fetchAIMessage(prompt, aiKey.trim());
       setChatMessages((prev) => [...prev, { role: "assistant", content: reply }]);
     } catch (e) {
-      setChatMessages((prev) => [...prev, { role: "assistant", content: "⚠️ Error reaching AI. Check your API key." }]);
+      const isAuth = e.message.includes("401") || e.message.toLowerCase().includes("auth");
+      setChatMessages((prev) => [...prev, {
+        role: "assistant",
+        content: isAuth
+          ? "⚠️ API key rejected (401). Click ⚙️ AI Key and verify your key is correct."
+          : "⚠️ Error reaching AI. Check your API key.",
+      }]);
     } finally {
       setChatLoading(false);
     }
@@ -388,7 +410,7 @@ export default function HabitDashboard() {
               <input
                 type="password"
                 value={aiKey}
-                onChange={(e) => setAiKey(e.target.value)}
+                onChange={(e) => setAiKey(e.target.value.trim())}
                 placeholder="sk-..."
                 className="flex-1 rounded-lg border border-white/10 bg-white/4 px-3 py-1.5 text-xs text-slate-200 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
               />
