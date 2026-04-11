@@ -200,7 +200,13 @@ export default function HabitDashboard() {
     try { return localStorage.getItem(AI_KEY_STORAGE) || ""; } catch (e) { console.error(e); return ""; }
   });
   const [aiProxy, setAiProxy]           = useState(() => {
-    try { return localStorage.getItem(AI_PROXY_STORAGE) || ""; } catch (e) { console.error(e); return ""; }
+    try {
+      const stored = localStorage.getItem(AI_PROXY_STORAGE) || "";
+      // Sanitize: if a full OpenAI URL was accidentally saved as the proxy base, reset to empty
+      // so the correct CORS_PROXY gets used on next retry rather than appending /v1/chat/completions twice.
+      if (stored.includes("api.openai.com") || stored.includes("/v1/chat")) return "";
+      return stored;
+    } catch (e) { console.error(e); return ""; }
   });
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [history, setHistory]           = useState([]);
@@ -353,8 +359,10 @@ export default function HabitDashboard() {
       const isAuth    = msg.includes("401") || msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid api key");
       const isTimeout = e.name === "AbortError";
       const isNetwork = e instanceof TypeError || msg === "Failed to fetch" || msg.includes("NetworkError");
-      if (isNetwork && !aiProxy.trim()) {
+      const isBadProxy = msg.includes("404") || msg.includes("403");
+      if ((isNetwork || isBadProxy) && aiProxy.trim() !== CORS_PROXY) {
         try {
+          setAiProxy("");
           const result = await fetchAIMessage(prompt, aiKey.trim(), 400, CORS_PROXY);
           setAiProxy(CORS_PROXY);
           setAiInsight(result);
@@ -392,8 +400,10 @@ export default function HabitDashboard() {
       const isAuth    = msg.includes("401") || msg.toLowerCase().includes("unauthorized") || msg.toLowerCase().includes("invalid api key");
       const isTimeout = e.name === "AbortError";
       const isNetwork = e instanceof TypeError || msg === "Failed to fetch" || msg.includes("NetworkError");
-      if (isNetwork && !aiProxy.trim()) {
+      const isBadProxy = msg.includes("404") || msg.includes("403");
+      if ((isNetwork || isBadProxy) && aiProxy.trim() !== CORS_PROXY) {
         try {
+          setAiProxy("");
           const proxyReply = await fetchAIMessage(prompt, aiKey.trim(), 400, CORS_PROXY);
           setAiProxy(CORS_PROXY);
           setChatMessages((prev) => [...prev, { role: "assistant", content: proxyReply }]);
