@@ -55,15 +55,16 @@ function exportHabitContext(schedule, weekStats) {
   };
 }
 
-const CORS_PROXY = "https://corsproxy.io/?";
+const CORS_PROXY = "https://corsproxy.io/?url=";
+const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 
 async function fetchAIMessage(prompt, apiKey, maxTokens = 400, proxyBase = "") {
   // Support two proxy styles:
   //   1. OpenAI-compatible base URL  → {proxyBase}/v1/chat/completions
-  //   2. CORS-proxy wrapper (ends with ?) → {proxyBase}https://api.openai.com/v1/chat/completions
+  //   2. CORS-proxy wrapper (ends with ? or =) → {proxyBase}{encodeURIComponent(openai_url)}
   const t = (proxyBase || "").trimEnd();
-  const url = t.endsWith("?")
-    ? `${t}https://api.openai.com/v1/chat/completions`
+  const url = t.endsWith("?") || t.endsWith("=")
+    ? `${t}${encodeURIComponent(OPENAI_CHAT_URL)}`
     : `${t.replace(/\/$/, "") || "https://api.openai.com"}/v1/chat/completions`;
 
   const controller = new AbortController();
@@ -360,7 +361,7 @@ export default function HabitDashboard() {
       setAiInsight(
         isAuth    ? `⚠️ API key rejected (401). Click ⚙️ AI Key and verify your key.\n\nDetails: ${msg}` :
         isTimeout ? "⚠️ Request timed out after 30 s. OpenAI may be slow — try again." :
-        isNetwork ? `⚠️ Network error: browser could not reach OpenAI.\n\nYour environment may block direct calls to api.openai.com. Enter a proxy URL in ⚙️ AI Key settings (e.g. https://corsproxy.io/?) to route requests through a CORS proxy.\n\nDetails: ${msg}` :
+        isNetwork ? `⚠️ Network error: browser could not reach OpenAI.\n\nYour environment may block direct calls to api.openai.com. Enter a proxy URL in ⚙️ AI Key settings (e.g. https://corsproxy.io/?url=) to route requests through a CORS proxy.\n\nDetails: ${msg}` :
                     `⚠️ Could not fetch insight.\n\nDetails: ${msg}`
       );
     } finally {
@@ -401,7 +402,7 @@ export default function HabitDashboard() {
         content:
           isAuth    ? `⚠️ API key rejected (401). Verify your key in ⚙️ AI Key.\n\nDetails: ${msg}` :
           isTimeout ? "⚠️ Request timed out after 30 s. Try again." :
-          isNetwork ? `⚠️ Network error: browser could not reach OpenAI.\nEnter https://corsproxy.io/? in the Proxy URL field in ⚙️ AI Key settings.\n\nDetails: ${msg}` :
+          isNetwork ? `⚠️ Network error: browser could not reach OpenAI.\nEnter https://corsproxy.io/?url= in the Proxy URL field in ⚙️ AI Key settings.\n\nDetails: ${msg}` :
                       `⚠️ Error reaching AI.\n\nDetails: ${msg}`,
       }]);
     } finally {
@@ -485,13 +486,13 @@ export default function HabitDashboard() {
                   type="text"
                   value={aiProxy}
                   onChange={(e) => setAiProxy(e.target.value.trim())}
-                  placeholder="https://corsproxy.io/?  (free CORS proxy — leave blank to call OpenAI directly)"
+                  placeholder="https://corsproxy.io/?url=  (free CORS proxy — leave blank to call OpenAI directly)"
                   className="flex-1 rounded-lg border border-white/10 bg-white/4 px-3 py-1.5 text-xs text-slate-400 outline-none placeholder:text-slate-600 focus:border-blue-500/40"
                 />
               </div>
               <p className="text-[10px] text-slate-600">
                 If you see a "Failed to fetch" / network error, the app will automatically retry via <span className="text-slate-500">corsproxy.io</span> and save it here.
-                You can also enter a proxy URL manually: use <span className="text-slate-500">https://corsproxy.io/?</span> for a free CORS proxy, or the base URL of your own OpenAI-compatible proxy.
+                You can also enter a proxy URL manually: use <span className="text-slate-500">https://corsproxy.io/?url=</span> for a free CORS proxy, or the base URL of your own OpenAI-compatible proxy.
               </p>
             </div>
           )}
