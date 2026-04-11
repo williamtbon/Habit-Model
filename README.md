@@ -61,10 +61,14 @@ const OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions";
 async function fetchAIMessage(prompt, apiKey, maxTokens = 400, proxyBase = "") {
   // Support two proxy styles:
   //   1. OpenAI-compatible base URL  → {proxyBase}/v1/chat/completions
-  //   2. CORS-proxy wrapper (ends with ? or =) → {proxyBase}{encodeURIComponent(openai_url)}
+  //   2. CORS-proxy wrapper:
+  //      - ends with "=" (e.g. "https://corsproxy.io/?url=") → append encoded URL directly
+  //      - ends with "?" (old stored format)                 → append "url=" + encoded URL
   const t = (proxyBase || "").trimEnd();
-  const url = t.endsWith("?") || t.endsWith("=")
+  const url = t.endsWith("=")
     ? `${t}${encodeURIComponent(OPENAI_CHAT_URL)}`
+    : t.endsWith("?")
+    ? `${t}url=${encodeURIComponent(OPENAI_CHAT_URL)}`
     : `${t.replace(/\/$/, "") || "https://api.openai.com"}/v1/chat/completions`;
 
   const controller = new AbortController();
