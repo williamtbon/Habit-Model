@@ -190,7 +190,10 @@ function DayBarChart({ dayStats }) {
 
 /* ─── Main component ─── */
 export default function HabitDashboard() {
-  const [weekData, setWeekData]         = useState(buildInitialState);
+  const [weekData, setWeekData]         = useState(() => {
+    try { const s = localStorage.getItem(STORAGE_KEY); if (s) return JSON.parse(s); } catch (e) { console.error(e); }
+    return buildInitialState();
+  });
   const [activeDay, setActiveDay]       = useState(null);
   const [justToggled, setJustToggled]   = useState(null);
   const [toasts, setToasts]             = useState([]);
@@ -209,7 +212,10 @@ export default function HabitDashboard() {
     } catch (e) { console.error(e); return ""; }
   });
   const [showKeyInput, setShowKeyInput] = useState(false);
-  const [history, setHistory]           = useState([]);
+  const [history, setHistory]           = useState(() => {
+    try { const h = localStorage.getItem(HISTORY_KEY); if (h) return JSON.parse(h); } catch (e) { console.error(e); }
+    return [];
+  });
   const [aiInsight, setAiInsight]       = useState("");
   const [aiInsightLoading, setAiInsightLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -217,19 +223,9 @@ export default function HabitDashboard() {
   const [chatLoading, setChatLoading]   = useState(false);
 
   useEffect(() => {
-    try { const s = localStorage.getItem(STORAGE_KEY); if (s) setWeekData(JSON.parse(s)); }
-    catch (e) { console.error(e); }
-  }, []);
-
-  useEffect(() => {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(weekData)); }
     catch (e) { console.error(e); }
   }, [weekData]);
-
-  useEffect(() => {
-    try { const h = localStorage.getItem(HISTORY_KEY); if (h) setHistory(JSON.parse(h)); }
-    catch (e) { console.error(e); }
-  }, []);
 
   useEffect(() => {
     try { localStorage.setItem(AI_KEY_STORAGE, aiKey); }
